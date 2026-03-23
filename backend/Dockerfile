@@ -1,37 +1,40 @@
-# ---- Build stage ----
-# ---- Production stage ----
-FROM node:20.18.3-alpine3.21 AS production
-
-# Add this to get the latest OS security patches
-RUN apk upgrade --no-cache && \
-    apk add --no-cache dumb-init=1.2.5-r3
+# ---- STAGE 1: Build Stage ----
+# We use a full node image to install dependencies
+FROM node:20.18.3-alpine3.21 AS build
 WORKDIR /app
 
 # Copy lockfiles first to leverage layer caching
 COPY package.json package-lock.json* ./
 
-# Using npm ci ensures reproducible builds for DevSecOps
-RUN npm ci --only=production && npm cache clean --force
+# Install ALL dependencies (including devDeps if needed for building)
+RUN npm ci && npm cache clean --force
 
-# Copy the source code
+# Copy the rest of the source code
 COPY . .
 
-# ---- Production stage ----
-FROM node:20-alpine AS production
+# ---- STAGE 2: Production Stage ----
+# We use a fresh, slim image for the final container
+FROM node:20.18.3-alpine3.21 AS production
 
-# Security: Pin version to satisfy Hadolint DL3018 (Version 1.2.5-r3 for Alpine)
-RUN apk add --no-cache dumb-init=1.2.5-r3
+# 1. Add SHELL for Hadolint compliance
+SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
-# Security: Create dedicated non-root group and user
+# 2. Get the latest OS security patches and install dumb-init
+RUN apk upgrade --no-cache && \
+    apk add --no-cache dumb-init=1.2.5-r3
+
+# 3. Create dedicated non-root group and user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
-# Copy only production dependencies and source from build stage
+# 4. Copy ONLY what is needed from the build stage
+# This keeps the image size small and secure
 COPY --from=build /app/node_modules ./node_modules
-COPY src/ ./src/
+COPY --from=build /app/src ./src
+COPY --from=build /app/package.json ./package.json
 
-# Security: Ensure non-root ownership
+# 5. Ensure non-root ownership
 RUN chown -R appuser:appgroup /app
 
 # Switch to non-root user
