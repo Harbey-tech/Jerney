@@ -83,36 +83,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 🔹 Build Image Locally with SHA and latest tag
-      - name: Build Image Locally
-        run: |
-          IMAGE_SHA=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
-          IMAGE_LATEST=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:latest
-          docker build -t $IMAGE_SHA -t $IMAGE_LATEST ./${{ matrix.component }}
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      # 🔬 Run Trivy Scan on Local Image
+      - name: Build & Push
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.component }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          provenance: true
+          sbom: false
+
+      # 🔬 RUN TRIVY SCAN (Fixed: scan the actual built image)
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@v0.28.0
         with:
-          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
+          image-ref: ${{ steps.meta.outputs.image }} # Scan the exact built image
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
 
-      # 🔹 Push Images Only On Main Branch
-      - name: Push Image (main branch only)
-        if: github.event_name != 'pull_request'
-        run: |
-          docker push ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
-          docker push ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:latest
-
-      # 🔐 Sign Image (main branch only)
+      # 🔐 SIGN IMAGE
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
-      - name: Sign Image
-        if: github.event_name != 'pull_request'
+      - name: Sign image
         run: |
-          IMAGE_REF=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
+          IMAGE_REF=${{ steps.meta.outputs.image }}
           cosign sign --yes $IMAGE_REF
 
   # ==============================================================  
