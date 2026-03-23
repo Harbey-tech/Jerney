@@ -14,7 +14,7 @@ COPY . .
 # ---- Production stage ----
 FROM node:20-alpine AS production
 
-# Security: Pin version to satisfy Hadolint DL3018
+# Security: Pin version to satisfy Hadolint DL3018 (Version 1.2.5-r3 for Alpine)
 RUN apk add --no-cache dumb-init=1.2.5-r3
 
 # Security: Create dedicated non-root group and user
