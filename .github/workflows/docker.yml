@@ -1,5 +1,5 @@
 # ==============================================================
-# Jerney - DevSecOps CI/CD Pipeline (FULL COMPLETE VERSION - FIXED)
+# Jerney - DevSecOps CI/CD Pipeline (FULL COMPLETE VERSION - FINAL FIX)
 # ==============================================================
 
 name: Jerney DevSecOps Pipeline
@@ -22,15 +22,14 @@ env:
 
 jobs:
   # ==============================================================
-  # STAGE 0: Prepare (Lowercase Repo)
+  # STAGE 0: Prepare
   # ==============================================================
   prepare:
     runs-on: ubuntu-latest
     outputs:
       repo_lower: ${{ steps.lowercase.outputs.repo_lower }}
     steps:
-      - name: Convert repo to lowercase
-        id: lowercase
+      - id: lowercase
         run: |
           echo "repo_lower=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
@@ -60,7 +59,7 @@ jobs:
           npm audit --audit-level=high || true
 
   # ==============================================================
-  # STAGE 3: Build & Push + Cosign Signing
+  # STAGE 3: Build & Push + Sign
   # ==============================================================
   build:
     runs-on: ubuntu-latest
@@ -111,7 +110,7 @@ jobs:
           cosign sign --yes ${{ steps.vars.outputs.IMAGE }}:${{ github.sha }}
 
   # ==============================================================
-  # STAGE 4: Container Image Scan (Trivy FIXED)
+  # STAGE 4: Image Scan (FIXED - MANUAL TRIVY)
   # ==============================================================
   image-scan:
     runs-on: ubuntu-latest
@@ -123,17 +122,25 @@ jobs:
         component: [backend, frontend]
 
     steps:
-      - name: Scan image
-        uses: aquasecurity/trivy-action@v0.29.0
-        with:
-          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
-          format: table
-          exit-code: "1"
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Scan Image
+        run: |
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            --ignore-unfixed \
+            ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
 
   # ==============================================================
-  # STAGE 5: IaC Scan (Checkov)
+  # STAGE 5: IaC Scan
   # ==============================================================
   iac-scan:
     runs-on: ubuntu-latest
@@ -143,8 +150,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Checkov
-        uses: bridgecrewio/checkov-action@v12
+      - uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
           framework: terraform,kubernetes
@@ -181,7 +187,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install yq safely
+      - name: Install yq
         run: |
           sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
           sudo chmod +x /usr/bin/yq
