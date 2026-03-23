@@ -1,17 +1,17 @@
 # ---- Build stage ----
-FROM node:20-alpine AS build
+FROM node:20.5.0-alpine AS build  # Use latest patch to reduce CVEs
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --only=production && npm cache clean --force
 
 # ---- Production stage ----
-FROM node:20-alpine AS production
+FROM node:20.5.0-alpine AS production  # pinned minor version for security
 
 # Security: run as non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Security: remove unnecessary packages
-RUN apk --no-cache add dumb-init
+# Security: install minimal runtime dependencies with pinned versions
+RUN apk add --no-cache dumb-init=1.2.5-r0  # Pin version to satisfy DL3018
 
 WORKDIR /app
 
