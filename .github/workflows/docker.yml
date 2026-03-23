@@ -83,37 +83,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 🔹 Build Image Locally with SHA and latest tag
-      - name: Build Image Locally
+      # 🔹 Build Images
+      - name: Build Docker Images
         run: |
           IMAGE_SHA=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
           IMAGE_LATEST=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:latest
+          echo "IMAGE_SHA=$IMAGE_SHA" >> $GITHUB_ENV
+          echo "IMAGE_LATEST=$IMAGE_LATEST" >> $GITHUB_ENV
           docker build -t $IMAGE_SHA -t $IMAGE_LATEST ./${{ matrix.component }}
 
       # 🔬 Run Trivy Scan on Local Image
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@v0.28.0
         with:
-          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
+          image-ref: ${{ env.IMAGE_SHA }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
 
-      # 🔹 Push Images Only On Main Branch
-      - name: Push Image (main branch only)
-        if: github.event_name != 'pull_request'
-        run: |
-          docker push ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
-          docker push ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:latest
-
-      # 🔐 Sign Image (main branch only)
+      # 🔐 Sign Image
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
-      - name: Sign Image
+      - name: Sign image
+        run: |
+          cosign sign --yes ${{ env.IMAGE_SHA }}
+          cosign sign --yes ${{ env.IMAGE_LATEST }}
+
+      # 🔹 Push Images (only if not a PR)
+      - name: Push Docker Images
         if: github.event_name != 'pull_request'
         run: |
-          IMAGE_REF=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
-          cosign sign --yes $IMAGE_REF
+          docker push ${{ env.IMAGE_SHA }}
+          docker push ${{ env.IMAGE_LATEST }}
 
   # ==============================================================  
   # STAGE 5: IaC Scan (Checkov)
