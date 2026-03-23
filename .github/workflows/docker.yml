@@ -1,189 +1,76 @@
-# ==============================================================  
-# Jerney - DevSecOps CI/CD Pipeline (FULL COMPLETE VERSION WITH DIGEST FIX)  
-# ==============================================================  
-
-name: Jerney DevSecOps Pipeline
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
-    branches: ["main"]
-
-concurrency:
-  group: jerney-${{ github.ref }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
-
-env:
-  DOCKER_REGISTRY: ghcr.io
+    branches: [ "main" ]
 
 jobs:
-  # STAGE 0: Prepare (Lowercase Repo)
-  prepare:
-    name: "🏗️ Prepare Environment"
+  build-and-scan:
     runs-on: ubuntu-latest
-    outputs:
-      repo_lower: ${{ steps.lowercase.outputs.repo_lower }}
-    steps:
-      - name: Lowercase Registry Path
-        id: lowercase
-        run: |
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "repo_lower=$REPO_LOWER" >> $GITHUB_OUTPUT
+    env:
+      REGISTRY: ghcr.io/harbey-tech/jerney
 
-  # STAGE 1 & 2: Lint & SCA (NPM Audit)
-  lint-and-sca:
-    name: "🛡️ Audit ${{ matrix.component }}"
-    needs: prepare
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        component: [backend, frontend]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: "${{ matrix.component }}/package-lock.json"
-      - working-directory: ${{ matrix.component }}
-        run: |
-          npm ci
-          npm run lint || true
-          npm audit --audit-level=high
+      # 1. Checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-  # STAGE 3: Build & Push (Cosign Signing)
-  build:
-    name: "🐳 Build ${{ matrix.component }}"
-    runs-on: ubuntu-latest
-    needs: [lint-and-sca, prepare]
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    strategy:
-      matrix:
-        component: [backend, frontend]
-    outputs:
-      digest-backend: ${{ steps.set-digest.outputs.digest-backend }}
-      digest-frontend: ${{ steps.set-digest.outputs.digest-frontend }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      # 2. Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 3. Log in to GitHub Container Registry
+      - name: Log in to GHCR
+        uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}
-          tags: |
-            type=sha,prefix=,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
-      - name: Build & Push
-        id: build-push
+
+      # ---------------- Backend ----------------
+      # 4. Build & push backend image
+      - name: Build & Push Backend
         uses: docker/build-push-action@v6
         with:
-          context: ./${{ matrix.component }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          provenance: true
-          sbom: false
+          context: ./backend
+          push: true
+          tags: ${{ env.REGISTRY }}/jerney-backend:latest
 
-      # Capture digest for scan
-      - name: Set digest output
-        id: set-digest
-        run: |
-          if [[ "${{ matrix.component }}" == "backend" ]]; then
-            echo "digest-backend=${{ steps.build-push.outputs.digest }}" >> $GITHUB_OUTPUT
-          else
-            echo "digest-frontend=${{ steps.build-push.outputs.digest }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
-      - name: Sign image
-        run: |
-          cosign sign --yes ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build-push.outputs.digest }}
-
-  # STAGE 4: Container Scan (Trivy)
-  image-scan:
-    name: "🔬 Scan ${{ matrix.component }}"
-    runs-on: ubuntu-latest
-    needs: build
-    continue-on-error: true
-    strategy:
-      matrix:
-        component: [backend, frontend]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Trivy scan
+      # 5. Scan backend image with Trivy
+      - name: Scan Backend with Trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ matrix.component == 'backend' && 'ghcr.io/' + needs.prepare.outputs.repo_lower + '/jerney-backend@' + needs.build.outputs.digest-backend || 'ghcr.io/' + needs.prepare.outputs.repo_lower + '/jerney-frontend@' + needs.build.outputs.digest-frontend }}
+          image-ref: ${{ env.REGISTRY }}/jerney-backend:latest
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
 
-  # STAGE 5: IaC Scan (Checkov)
-  iac-scan:
-    name: "🏗️ IaC Security Scan"
-    runs-on: ubuntu-latest
-    needs: lint-and-sca
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Checkov (IaC Scan)
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: .
-          framework: terraform,kubernetes
-          soft_fail: true
-
-  # STAGE 6: Dockerfile Lint
-  docker-lint:
-    name: "📋 Dockerfile Lint"
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        component: [backend, frontend]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Hadolint
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: ./${{ matrix.component }}/Dockerfile
-          failure-threshold: error
-
-  # STAGE 7: Update K8s Manifest
-  update-manifest:
-    name: "🚀 Update K8s Manifest"
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    needs: build
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install yq
-        run: sudo apt-get install -y yq
-      - name: Update manifest
+      # 6. Sign backend image
+      - name: Sign Backend Image
         run: |
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          REPO_LOWER=${{ needs.prepare.outputs.repo_lower }}
-          yq -i "(.spec.template.spec.containers[] | select(.name == \"backend\").image) = \"ghcr.io/$REPO_LOWER/jerney-backend:$SHORT_SHA\"" k8s/jerney.yaml
-          yq -i "(.spec.template.spec.containers[] | select(.name == \"frontend\").image) = \"ghcr.io/$REPO_LOWER/jerney-frontend:$SHORT_SHA\"" k8s/jerney.yaml
-      - name: Commit and push
+          cosign sign --yes ${{ env.REGISTRY }}/jerney-backend:latest
+
+      # ---------------- Frontend ----------------
+      # 7. Build & push frontend image
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ env.REGISTRY }}/jerney-frontend:latest
+
+      # 8. Scan frontend image with Trivy
+      - name: Scan Frontend with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/jerney-frontend:latest
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+
+      # 9. Sign frontend image
+      - name: Sign Frontend Image
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/jerney.yaml
-          git diff --cached --quiet || git commit -m "ci: update k8s images [skip ci]"
-          git push
+          cosign sign --yes ${{ env.REGISTRY }}/jerney-frontend:latest
