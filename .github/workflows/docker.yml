@@ -19,6 +19,11 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  DOCKER_REGISTRY: ghcr.io
+  BACKEND_IMAGE: ghcr.io/${{ github.repository }}/jerney-backend
+  FRONTEND_IMAGE: ghcr.io/${{ github.repository }}/jerney-frontend
+
 jobs:
   # ==============================================================
   # STAGE 1: Linting
@@ -74,7 +79,7 @@ jobs:
         run: npm audit --audit-level=high
 
   # ==============================================================
-  # STAGE 3: Build & Push Images
+  # STAGE 3: Build & Push Images (with SBOM + provenance)
   # ==============================================================
   build:
     name: "🐳 Build ${{ matrix.component }}"
@@ -94,9 +99,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Lowercase repo name
-        run: echo "REPO_LOWER=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -109,7 +111,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ env.REPO_LOWER }}/jerney-${{ matrix.component }}
+          images: ghcr.io/${{ github.repository }}/jerney-${{ matrix.component }}
           tags: |
             type=sha
             type=ref,event=branch
@@ -128,12 +130,13 @@ jobs:
           provenance: true
           sbom: true
 
+      # 🔐 Sign images
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
       - name: Sign container image
         run: |
-          cosign sign --yes ghcr.io/${{ env.REPO_LOWER }}/jerney-${{ matrix.component }}:${{ github.sha }}
+          cosign sign --yes ghcr.io/${{ github.repository }}/jerney-${{ matrix.component }}:${{ github.sha }}
 
   # ==============================================================
   # STAGE 4: Container Image Scan (Trivy)
@@ -149,14 +152,99 @@ jobs:
         component: [backend, frontend]
 
     steps:
-      - name: Lowercase repo name
-        run: echo "REPO_LOWER=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-
       - uses: aquasecurity/trivy-action@0.20.0
         with:
-          image-ref: ghcr.io/${{ env.REPO_LOWER }}/jerney-${{ matrix.component }}:${{ github.sha }}
+          image-ref: ghcr.io/${{ github.repository }}/jerney-${{ matrix.component }}:${{ github.sha }}
           format: table
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
-          severity: CR
+          severity: CRITICAL,HIGH
+
+  # ==============================================================
+  # STAGE 5: IaC Scan (Checkov)
+  # ==============================================================
+  iac-scan:
+    name: "🏗️ IaC Security"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform/
+          framework: terraform
+          soft_fail: false
+
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: k8s/
+          framework: kubernetes
+          soft_fail: true
+
+  # ==============================================================
+  # STAGE 6: Dockerfile Lint
+  # ==============================================================
+  dockerfile-lint:
+    name: "📋 Dockerfile Lint"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    strategy:
+      matrix:
+        component: [backend, frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ matrix.component }}/Dockerfile
+          failure-threshold: warning
+
+  # ==============================================================
+  # STAGE 7: Update K8s Manifest (SAFE)
+  # ==============================================================
+  update-manifest:
+    name: "🚀 Update K8s Manifest"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs: build
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install yq
+        run: sudo apt-get install -y yq
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Update manifest safely
+        run: |
+          IMAGE_TAG=${{ steps.sha.outputs.short }}
+
+          yq -i '
+          (.spec.template.spec.containers[] | select(.name == "backend").image) = strenv(BACKEND_IMAGE) + ":" + strenv(IMAGE_TAG)
+          ' k8s/jerney.yaml
+
+          yq -i '
+          (.spec.template.spec.containers[] | select(.name == "frontend").image) = strenv(FRONTEND_IMAGE) + ":" + strenv(IMAGE_TAG)
+          ' k8s/jerney.yaml
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/jerney.yaml
+          git diff --cached --quiet || git commit -m "ci: update images to ${{ steps.sha.outputs.short }} [skip ci]"
+          git push
