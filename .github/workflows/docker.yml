@@ -21,9 +21,9 @@ env:
   DOCKER_REGISTRY: ghcr.io
 
 jobs:
-  # ==============================================================  
+  # ==============================================================
   # STAGE 0: Prepare (Lowercase Repo)
-  # ==============================================================  
+  # ==============================================================
   prepare:
     name: "🏗️ Prepare Environment"
     runs-on: ubuntu-latest
@@ -36,9 +36,9 @@ jobs:
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "repo_lower=$REPO_LOWER" >> $GITHUB_OUTPUT
 
-  # ==============================================================  
+  # ==============================================================
   # STAGE 1 & 2: Lint & SCA (NPM Audit)
-  # ==============================================================  
+  # ==============================================================
   lint-and-sca:
     name: "🛡️ Audit ${{ matrix.component }}"
     needs: prepare
@@ -59,9 +59,12 @@ jobs:
           npm run lint || true
           npm audit --audit-level=high
 
-  # ==============================================================  
+  # ==============================================================
   # STAGE 3: Build & Push (Cosign Signing)
-  # ==============================================================  
+  # FIX: digest is written to a per-component artifact file instead
+  # of a shared job output, preventing matrix jobs from overwriting
+  # each other's digest value.
+  # ==============================================================
   build:
     name: "🐳 Build ${{ matrix.component }}"
     runs-on: ubuntu-latest
@@ -74,8 +77,6 @@ jobs:
     strategy:
       matrix:
         component: [backend, frontend]
-    outputs:
-      digest: ${{ steps.build-push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -107,10 +108,23 @@ jobs:
         run: |
           IMAGE_REF=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build-push.outputs.digest }}
           cosign sign --yes $IMAGE_REF
+      # FIX: Save this component's digest to a uniquely named file
+      - name: Save digest to file
+        run: |
+          echo "${{ steps.build-push.outputs.digest }}" > digest-${{ matrix.component }}.txt
+      # FIX: Upload as a component-scoped artifact so image-scan can
+      # download the correct digest for each matrix leg independently
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.component }}
+          path: digest-${{ matrix.component }}.txt
 
-  # ==============================================================  
+  # ==============================================================
   # STAGE 4: Container Scan (Trivy)
-  # ==============================================================  
+  # FIX: each matrix leg downloads its own digest artifact instead
+  # of reading from the shared (overwritten) job output.
+  # ==============================================================
   image-scan:
     name: "🔬 Scan ${{ matrix.component }}"
     runs-on: ubuntu-latest
@@ -121,17 +135,28 @@ jobs:
         component: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
+      # FIX: Download only the digest artifact for this component
+      - name: Download digest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-${{ matrix.component }}
+      # FIX: Read the digest from the file into a step output
+      - name: Read digest
+        id: digest
+        run: |
+          echo "value=$(cat digest-${{ matrix.component }}.txt)" >> $GITHUB_OUTPUT
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@v0.29.0
         with:
-          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ needs.build.outputs.digest }}
+          # FIX: reference the per-component digest, not needs.build.outputs.digest
+          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.digest.outputs.value }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
 
-  # ==============================================================  
+  # ==============================================================
   # STAGE 5: IaC Scan (Checkov) - Terraform & K8s
-  # ==============================================================  
+  # ==============================================================
   iac-scan:
     name: "🏗️ IaC Security Scan"
     runs-on: ubuntu-latest
@@ -146,9 +171,9 @@ jobs:
           framework: terraform,kubernetes
           soft_fail: true
 
-  # ==============================================================  
+  # ==============================================================
   # STAGE 6: Dockerfile Lint (Hadolint)
-  # ==============================================================  
+  # ==============================================================
   docker-lint:
     name: "📋 Dockerfile Lint"
     runs-on: ubuntu-latest
@@ -163,9 +188,9 @@ jobs:
           dockerfile: ./${{ matrix.component }}/Dockerfile
           failure-threshold: error
 
-  # ==============================================================  
+  # ==============================================================
   # STAGE 7: Update K8s Manifest
-  # ==============================================================  
+  # ==============================================================
   update-manifest:
     name: "🚀 Update K8s Manifest"
     runs-on: ubuntu-latest
