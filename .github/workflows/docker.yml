@@ -191,16 +191,15 @@ jobs:
   dockerfile-lint:
     name: "📋 Dockerfile Lint"
     runs-on: ubuntu-latest
-    continue-on-error: true
-
     strategy:
       matrix:
         component: [backend, frontend]
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: hadolint/hadolint-action@v3.1.0
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: ${{ matrix.component }}/Dockerfile
           failure-threshold: warning
