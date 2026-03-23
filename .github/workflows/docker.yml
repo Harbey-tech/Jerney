@@ -98,23 +98,26 @@ jobs:
         with:
           context: ./${{ matrix.component }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
+            ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:latest
           provenance: true
           sbom: false
 
-      # 🔬 RUN TRIVY SCAN (Fixed: Moved inside matrix to handle both components)
+      # 🔬 RUN TRIVY SCAN (scan SHA-tagged image locally)
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@v0.28.0
         with:
-          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build-push.outputs.digest }}
+          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
 
-      # 🔐 SIGN IMAGE
+      # 🔐 SIGN IMAGE (only for pushed images)
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign image
+        if: github.event_name != 'pull_request'
         run: |
           IMAGE_REF=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build-push.outputs.digest }}
           cosign sign --yes $IMAGE_REF
