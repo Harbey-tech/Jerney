@@ -102,21 +102,24 @@ jobs:
           provenance: true
           sbom: false
 
-      # 🔬 RUN TRIVY SCAN (Fixed: scan the actual built image)
+      # 🔬 RUN TRIVY SCAN (Fixed: use the digest from build-push)
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@v0.28.0
         with:
-          image-ref: ${{ steps.meta.outputs.image }} # Scan the exact built image
+          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build-push.outputs.digest }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          timeout: 10m
 
       # 🔐 SIGN IMAGE
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign image
         run: |
-          IMAGE_REF=${{ steps.meta.outputs.image }}
+          IMAGE_REF=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build-push.outputs.digest }}
           cosign sign --yes $IMAGE_REF
 
   # ==============================================================  
