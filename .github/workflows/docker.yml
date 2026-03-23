@@ -1,5 +1,5 @@
 # ==============================================================
-# Jerney - DevSecOps CI/CD Pipeline (STABLE & SECURE)
+# Jerney - DevSecOps CI/CD Pipeline (FULL COMPLETE VERSION)
 # ==============================================================
 
 name: Jerney DevSecOps Pipeline
@@ -21,9 +21,7 @@ env:
   DOCKER_REGISTRY: ghcr.io
 
 jobs:
-  # ==============================================================
-  # STAGE 0: Prepare (Ensures Lowercase for OCI Compliance)
-  # ==============================================================
+  # STAGE 0: Prepare (Lowercase Repo)
   prepare:
     name: "🏗️ Prepare Environment"
     runs-on: ubuntu-latest
@@ -36,14 +34,11 @@ jobs:
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "repo_lower=$REPO_LOWER" >> $GITHUB_OUTPUT
 
-  # ==============================================================
-  # STAGE 1: Linting
-  # ==============================================================
-  lint:
-    name: "🔍 Lint Code"
+  # STAGE 1 & 2: Lint & SCA (NPM Audit)
+  lint-and-sca:
+    name: "🛡️ Audit ${{ matrix.component }}"
     needs: prepare
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       matrix:
         component: [backend, frontend]
@@ -55,40 +50,16 @@ jobs:
           cache: "npm"
           cache-dependency-path: "${{ matrix.component }}/package-lock.json"
       - working-directory: ${{ matrix.component }}
-        run: npm ci
-      - working-directory: ${{ matrix.component }}
-        run: npm run lint
+        run: |
+          npm ci
+          npm run lint || true
+          npm audit --audit-level=high
 
-  # ==============================================================
-  # STAGE 2: Dependency Audit (SCA)
-  # ==============================================================
-  sca:
-    name: "🛡️ Dependency Audit"
-    runs-on: ubuntu-latest
-    needs: lint
-    strategy:
-      matrix:
-        component: [backend, frontend]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: "${{ matrix.component }}/package-lock.json"
-      - working-directory: ${{ matrix.component }}
-        run: npm ci
-      - name: Run npm audit
-        working-directory: ${{ matrix.component }}
-        run: npm audit --audit-level=high
-
-  # ==============================================================
-  # STAGE 3: Build & Push Images
-  # ==============================================================
+  # STAGE 3: Build & Push (Cosign Signing)
   build:
     name: "🐳 Build ${{ matrix.component }}"
     runs-on: ubuntu-latest
-    needs: [sca, prepare]
+    needs: [lint-and-sca, prepare]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -105,7 +76,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -113,32 +83,22 @@ jobs:
           images: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}
           tags: |
             type=sha,prefix=,format=long
-            type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
-
       - name: Build & Push
         uses: docker/build-push-action@v6
         with:
           context: ./${{ matrix.component }}
-          file: ./${{ matrix.component }}/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           provenance: true
           sbom: false 
-
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
-
-      - name: Sign container image
+      - name: Sign image
         run: |
           cosign sign --yes ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
 
-  # ==============================================================
-  # STAGE 4: Container Image Scan (Trivy)
-  # ==============================================================
+  # STAGE 4: Container Scan (Trivy)
   image-scan:
     name: "🔬 Scan ${{ matrix.component }}"
     runs-on: ubuntu-latest
@@ -147,21 +107,51 @@ jobs:
     strategy:
       matrix:
         component: [backend, frontend]
-  
     steps:
-      - name: Run Trivy Scanner
-        uses: aquasecurity/trivy-action@v0.28.0 # FIXED: Corrected version tag
+      - uses: actions/checkout@v4
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@v0.29.0 
         with:
           image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
           format: 'table'
           exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
   # ==============================================================
-  # STAGE 7: Update K8s Manifest
+  # STAGE 5: IaC Scan (Checkov) - VERIFY TERRAFORM & K8S
   # ==============================================================
+  iac-scan:
+    name: "🏗️ IaC Security Scan"
+    runs-on: ubuntu-latest
+    needs: lint-and-sca
+    continue-on-error: true # Prevents pipeline stop while you fix Terraform issues
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Checkov (IaC Scan)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform,kubernetes
+          soft_fail: true # Change to false once you've hardened your TF files
+
+  # ==============================================================
+  # STAGE 6: Dockerfile Lint (Hadolint)
+  # ==============================================================
+  docker-lint:
+    name: "📋 Dockerfile Lint"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ./${{ matrix.component }}/Dockerfile
+          failure-threshold: error
+
+  # STAGE 7: Update K8s Manifest
   update-manifest:
     name: "🚀 Update K8s Manifest"
     runs-on: ubuntu-latest
@@ -173,22 +163,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install yq
         run: sudo apt-get install -y yq
-      - name: Get short SHA
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Update manifest safely
+      - name: Update manifest
         run: |
-          IMAGE_TAG=${{ steps.sha.outputs.short }}
+          SHORT_SHA=$(git rev-parse --short HEAD)
           REPO_LOWER=${{ needs.prepare.outputs.repo_lower }}
-          
-          yq -i "(.spec.template.spec.containers[] | select(.name == \"backend\").image) = \"ghcr.io/$REPO_LOWER/jerney-backend:$IMAGE_TAG\"" k8s/jerney.yaml
-          yq -i "(.spec.template.spec.containers[] | select(.name == \"frontend\").image) = \"ghcr.io/$REPO_LOWER/jerney-frontend:$IMAGE_TAG\"" k8s/jerney.yaml
-
+          yq -i "(.spec.template.spec.containers[] | select(.name == \"backend\").image) = \"ghcr.io/$REPO_LOWER/jerney-backend:$SHORT_SHA\"" k8s/jerney.yaml
+          yq -i "(.spec.template.spec.containers[] | select(.name == \"frontend\").image) = \"ghcr.io/$REPO_LOWER/jerney-frontend:$SHORT_SHA\"" k8s/jerney.yaml
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add k8s/jerney.yaml
-          git diff --cached --quiet || git commit -m "ci: update images to ${{ steps.sha.outputs.short }} [skip ci]"
+          git diff --cached --quiet || git commit -m "ci: update k8s images [skip ci]"
           git push
