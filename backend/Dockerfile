@@ -1,17 +1,17 @@
 # ---- Build stage ----
-FROM node:20.5.0-alpine AS build  # Use latest patch to reduce CVEs
+FROM node:20-alpine AS build   # Use an existing tag
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --only=production && npm cache clean --force
 
 # ---- Production stage ----
-FROM node:20.5.0-alpine AS production  # pinned minor version for security
+FROM node:20-alpine AS production  # Use the same valid tag
 
 # Security: run as non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Security: install minimal runtime dependencies with pinned versions
-RUN apk add --no-cache dumb-init=1.2.5-r0  # Pin version to satisfy DL3018
+# Security: install minimal runtime dependencies
+RUN apk add --no-cache dumb-init  # version pinning optional
 
 WORKDIR /app
 
@@ -26,6 +26,6 @@ USER appuser
 
 EXPOSE 5000
 
-# Security: use dumb-init for proper signal handling (PID 1 problem)
+# Security: use dumb-init for proper signal handling
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "src/index.js"]
