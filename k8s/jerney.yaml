@@ -193,7 +193,7 @@ spec:
       containers:
         - name: backend
           # ✅ Use your own CI/CD-built image
-          image: ghcr.io/harbey-tech/jerney/jerney-backend:d7df8f6
+          image: ghcr.io/harbey-tech/jerney/jerney-backend:9cabdf8
           ports:
             - containerPort: 5000
               protocol: TCP
@@ -262,7 +262,7 @@ spec:
       containers:
         - name: frontend
           # ✅ Use your own CI/CD-built image
-          image: ghcr.io/harbey-tech/jerney/jerney-frontend:d7df8f6
+          image: ghcr.io/harbey-tech/jerney/jerney-frontend:9cabdf8
           ports:
             - containerPort: 8080
               protocol: TCP
