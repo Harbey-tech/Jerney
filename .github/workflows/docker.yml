@@ -128,7 +128,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
-          sbom: true
+          sbom: false
 
       # 🔐 Sign images
       - name: Install Cosign
