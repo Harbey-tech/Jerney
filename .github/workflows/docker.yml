@@ -83,13 +83,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 🔹 Build Image Locally with SHA and latest tag
       - name: Build Image Locally
         run: |
           IMAGE_SHA=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
           IMAGE_LATEST=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:latest
           docker build -t $IMAGE_SHA -t $IMAGE_LATEST ./${{ matrix.component }}
 
-      # 🔬 RUN TRIVY SCAN
+      # 🔬 Run Trivy Scan on Local Image
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@v0.28.0
         with:
@@ -98,17 +99,16 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
 
-      # 🔥 Push Images Only On Main Branch
+      # 🔹 Push Images Only On Main Branch
       - name: Push Image (main branch only)
         if: github.event_name != 'pull_request'
         run: |
           docker push ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
           docker push ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:latest
 
-      # 🔐 SIGN IMAGE (main branch only)
+      # 🔐 Sign Image (main branch only)
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
-
       - name: Sign Image
         if: github.event_name != 'pull_request'
         run: |
