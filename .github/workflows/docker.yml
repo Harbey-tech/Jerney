@@ -61,9 +61,8 @@ jobs:
 
   # ==============================================================
   # STAGE 3: Build & Push (Cosign Signing)
-  # FIX: digest is written to a per-component artifact file instead
-  # of a shared job output, preventing matrix jobs from overwriting
-  # each other's digest value.
+  # FIX: digest written to a per-component artifact file to prevent
+  # matrix jobs from overwriting each other's shared job output.
   # ==============================================================
   build:
     name: "🐳 Build ${{ matrix.component }}"
@@ -108,12 +107,9 @@ jobs:
         run: |
           IMAGE_REF=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build-push.outputs.digest }}
           cosign sign --yes $IMAGE_REF
-      # FIX: Save this component's digest to a uniquely named file
+      # FIX: Save digest to a component-scoped file and upload as artifact
       - name: Save digest to file
-        run: |
-          echo "${{ steps.build-push.outputs.digest }}" > digest-${{ matrix.component }}.txt
-      # FIX: Upload as a component-scoped artifact so image-scan can
-      # download the correct digest for each matrix leg independently
+        run: echo "${{ steps.build-push.outputs.digest }}" > digest-${{ matrix.component }}.txt
       - name: Upload digest artifact
         uses: actions/upload-artifact@v4
         with:
@@ -122,8 +118,10 @@ jobs:
 
   # ==============================================================
   # STAGE 4: Container Scan (Trivy)
-  # FIX: each matrix leg downloads its own digest artifact instead
-  # of reading from the shared (overwritten) job output.
+  # FIX 1: bumped to v0.35.0 — v0.29.0 internally depends on
+  #         aquasecurity/setup-trivy@v0.2.2 which no longer exists.
+  # FIX 2: each matrix leg downloads its own digest artifact
+  #         instead of the overwritten shared job output.
   # ==============================================================
   image-scan:
     name: "🔬 Scan ${{ matrix.component }}"
@@ -135,20 +133,18 @@ jobs:
         component: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
-      # FIX: Download only the digest artifact for this component
       - name: Download digest artifact
         uses: actions/download-artifact@v4
         with:
           name: digest-${{ matrix.component }}
-      # FIX: Read the digest from the file into a step output
       - name: Read digest
         id: digest
-        run: |
-          echo "value=$(cat digest-${{ matrix.component }}.txt)" >> $GITHUB_OUTPUT
+        run: echo "value=$(cat digest-${{ matrix.component }}.txt)" >> $GITHUB_OUTPUT
       - name: Run Trivy scan
-        uses: aquasecurity/trivy-action@v0.29.0
+        # FIX 1: v0.35.0 pins setup-trivy correctly; v0.29.0 is broken
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
-          # FIX: reference the per-component digest, not needs.build.outputs.digest
+          # FIX 2: per-component digest, not the overwritten needs.build.outputs.digest
           image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.digest.outputs.value }}
           format: table
           exit-code: 1
@@ -190,6 +186,9 @@ jobs:
 
   # ==============================================================
   # STAGE 7: Update K8s Manifest
+  # FIX: replaced `sudo apt-get install -y yq` (installs the Python
+  # yq which requires -y/-Y alongside -i) with mikefarah/yq which
+  # is the Go-based binary that supports -i/--in-place correctly.
   # ==============================================================
   update-manifest:
     name: "🚀 Update K8s Manifest"
@@ -200,8 +199,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      # FIX: official mikefarah/yq action instead of apt, which
+      # ships the Python yq that doesn't support -i without -y
       - name: Install yq
-        run: sudo apt-get install -y yq
+        uses: mikefarah/yq@v4
       - name: Update manifest
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
