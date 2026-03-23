@@ -61,8 +61,6 @@ jobs:
 
   # ==============================================================
   # STAGE 3: Build & Push (Cosign Signing)
-  # FIX: digest written to a per-component artifact file to prevent
-  # matrix jobs from overwriting each other's shared job output.
   # ==============================================================
   build:
     name: "🐳 Build ${{ matrix.component }}"
@@ -107,7 +105,6 @@ jobs:
         run: |
           IMAGE_REF=ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build-push.outputs.digest }}
           cosign sign --yes $IMAGE_REF
-      # FIX: Save digest to a component-scoped file and upload as artifact
       - name: Save digest to file
         run: echo "${{ steps.build-push.outputs.digest }}" > digest-${{ matrix.component }}.txt
       - name: Upload digest artifact
@@ -118,33 +115,46 @@ jobs:
 
   # ==============================================================
   # STAGE 4: Container Scan (Trivy)
-  # FIX 1: bumped to v0.35.0 — v0.29.0 internally depends on
-  #         aquasecurity/setup-trivy@v0.2.2 which no longer exists.
-  # FIX 2: each matrix leg downloads its own digest artifact
-  #         instead of the overwritten shared job output.
+  # FIX: trivy-action needs docker login before scanning a private
+  # GHCR image. Without it, Trivy cannot pull the image by digest
+  # and falls back to scanning a bare local tag (e.g. jerney-backend:scan)
+  # which is wrong. Login step added before the scan.
   # ==============================================================
   image-scan:
     name: "🔬 Scan ${{ matrix.component }}"
     runs-on: ubuntu-latest
     needs: [build, prepare]
     continue-on-error: true
+    permissions:
+      packages: read
     strategy:
       matrix:
         component: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
+
       - name: Download digest artifact
         uses: actions/download-artifact@v4
         with:
           name: digest-${{ matrix.component }}
+
       - name: Read digest
         id: digest
         run: echo "value=$(cat digest-${{ matrix.component }}.txt)" >> $GITHUB_OUTPUT
+
+      # FIX: log in to GHCR so Trivy can pull the image by digest.
+      # Without this, trivy-action cannot resolve the ghcr.io reference
+      # and silently scans a local fallback tag instead.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run Trivy scan
-        # FIX 1: v0.35.0 pins setup-trivy correctly; v0.29.0 is broken
         uses: aquasecurity/trivy-action@v0.35.0
         with:
-          # FIX 2: per-component digest, not the overwritten needs.build.outputs.digest
           image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.digest.outputs.value }}
           format: table
           exit-code: 1
@@ -186,9 +196,6 @@ jobs:
 
   # ==============================================================
   # STAGE 7: Update K8s Manifest
-  # FIX: replaced `sudo apt-get install -y yq` (installs the Python
-  # yq which requires -y/-Y alongside -i) with mikefarah/yq which
-  # is the Go-based binary that supports -i/--in-place correctly.
   # ==============================================================
   update-manifest:
     name: "🚀 Update K8s Manifest"
@@ -199,8 +206,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      # FIX: official mikefarah/yq action instead of apt, which
-      # ships the Python yq that doesn't support -i without -y
       - name: Install yq
         uses: mikefarah/yq@v4
       - name: Update manifest
