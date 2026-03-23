@@ -1,6 +1,6 @@
-# ==============================================================
-# Jerney - DevSecOps CI/CD Pipeline (FULL COMPLETE VERSION)
-# ==============================================================
+# ==============================================================  
+# Jerney - DevSecOps CI/CD Pipeline (FULL SECURE VERSION)  
+# ==============================================================  
 
 name: Jerney DevSecOps Pipeline
 
@@ -21,7 +21,9 @@ env:
   DOCKER_REGISTRY: ghcr.io
 
 jobs:
-  # STAGE 0: Prepare (Lowercase Repo)
+  # ==============================================================  
+  # STAGE 0: Prepare (Lowercase Repo)  
+  # ==============================================================  
   prepare:
     name: "🏗️ Prepare Environment"
     runs-on: ubuntu-latest
@@ -34,7 +36,9 @@ jobs:
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "repo_lower=$REPO_LOWER" >> $GITHUB_OUTPUT
 
-  # STAGE 1 & 2: Lint & SCA (NPM Audit)
+  # ==============================================================  
+  # STAGE 1 & 2: Lint & SCA (NPM Audit)  
+  # ==============================================================  
   lint-and-sca:
     name: "🛡️ Audit ${{ matrix.component }}"
     needs: prepare
@@ -55,7 +59,9 @@ jobs:
           npm run lint || true
           npm audit --audit-level=high
 
-  # STAGE 3: Build, Push & Sign Images (Cosign by digest)
+  # ==============================================================  
+  # STAGE 3: Build & Push (Cosign Signing by digest)  
+  # ==============================================================  
   build:
     name: "🐳 Build ${{ matrix.component }}"
     runs-on: ubuntu-latest
@@ -76,6 +82,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -84,7 +91,8 @@ jobs:
           tags: |
             type=sha,prefix=,format=long
             type=raw,value=latest,enable={{is_default_branch}}
-      - name: Build, push & capture digest
+
+      - name: Build & Push
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -92,17 +100,24 @@ jobs:
           file: ./${{ matrix.component }}/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
-          outputs: type=digest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: false
 
-      # 🔐 Sign image by digest
+      - name: Get image digest
+        run: echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:$(git rev-parse HEAD) | cut -d@ -f2)" >> $GITHUB_OUTPUT
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
+
       - name: Sign image by digest
         run: |
-          IMAGE_DIGEST=$(echo "${{ steps.build.outputs.digest }}" | cut -d'@' -f2)
-          cosign sign ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${IMAGE_DIGEST}
+          cosign sign --yes ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build.outputs.digest }}
 
-  # STAGE 4: Container Scan (Trivy)
+  # ==============================================================  
+  # STAGE 4: Container Scan (Trivy)  
+  # ==============================================================  
   image-scan:
     name: "🔬 Scan ${{ matrix.component }}"
     runs-on: ubuntu-latest
@@ -116,12 +131,14 @@ jobs:
       - name: Run Trivy
         uses: aquasecurity/trivy-action@v0.29.0
         with:
-          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ steps.build.outputs.digest }}
+          image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}@${{ needs.build.outputs.digest }}
           format: 'table'
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
 
-  # STAGE 5: IaC Scan (Checkov) - Terraform & K8s
+  # ==============================================================  
+  # STAGE 5: IaC Scan (Checkov)  
+  # ==============================================================  
   iac-scan:
     name: "🏗️ IaC Security Scan"
     runs-on: ubuntu-latest
@@ -129,14 +146,16 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Run Checkov (IaC Scan)
+      - name: Run Checkov
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
           framework: terraform,kubernetes
           soft_fail: true
 
-  # STAGE 6: Dockerfile Lint (Hadolint)
+  # ==============================================================  
+  # STAGE 6: Dockerfile Lint (Hadolint)  
+  # ==============================================================  
   docker-lint:
     name: "📋 Dockerfile Lint"
     runs-on: ubuntu-latest
@@ -151,7 +170,9 @@ jobs:
           dockerfile: ./${{ matrix.component }}/Dockerfile
           failure-threshold: error
 
-  # STAGE 7: Update K8s Manifest
+  # ==============================================================  
+  # STAGE 7: Update K8s Manifest  
+  # ==============================================================  
   update-manifest:
     name: "🚀 Update K8s Manifest"
     runs-on: ubuntu-latest
