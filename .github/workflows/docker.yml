@@ -1,5 +1,5 @@
 # ==============================================================
-# Jerney - DevSecOps CI/CD Pipeline (FIXED & STABLE)
+# Jerney - DevSecOps CI/CD Pipeline (FULL COMPLETE VERSION - FIXED)
 # ==============================================================
 
 name: Jerney DevSecOps Pipeline
@@ -35,7 +35,7 @@ jobs:
           echo "repo_lower=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
   # ==============================================================
-  # STAGE 1: Lint + SCA
+  # STAGE 1 & 2: Lint + SCA
   # ==============================================================
   lint-and-sca:
     runs-on: ubuntu-latest
@@ -60,7 +60,7 @@ jobs:
           npm audit --audit-level=high || true
 
   # ==============================================================
-  # STAGE 2: Build & Push + Sign
+  # STAGE 3: Build & Push + Cosign Signing
   # ==============================================================
   build:
     runs-on: ubuntu-latest
@@ -111,7 +111,7 @@ jobs:
           cosign sign --yes ${{ steps.vars.outputs.IMAGE }}:${{ github.sha }}
 
   # ==============================================================
-  # STAGE 3: Image Scan (Trivy FIXED)
+  # STAGE 4: Container Image Scan (Trivy FIXED)
   # ==============================================================
   image-scan:
     runs-on: ubuntu-latest
@@ -124,7 +124,7 @@ jobs:
 
     steps:
       - name: Scan image
-        uses: aquasecurity/trivy-action@0.20.0
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           image-ref: ghcr.io/${{ needs.prepare.outputs.repo_lower }}/jerney-${{ matrix.component }}:${{ github.sha }}
           format: table
@@ -133,7 +133,7 @@ jobs:
           ignore-unfixed: true
 
   # ==============================================================
-  # STAGE 4: IaC Scan
+  # STAGE 5: IaC Scan (Checkov)
   # ==============================================================
   iac-scan:
     runs-on: ubuntu-latest
@@ -151,7 +151,7 @@ jobs:
           soft_fail: true
 
   # ==============================================================
-  # STAGE 5: Dockerfile Lint
+  # STAGE 6: Dockerfile Lint
   # ==============================================================
   docker-lint:
     runs-on: ubuntu-latest
@@ -168,7 +168,7 @@ jobs:
           failure-threshold: warning
 
   # ==============================================================
-  # STAGE 6: Update K8s Manifest
+  # STAGE 7: Update K8s Manifest
   # ==============================================================
   update-manifest:
     runs-on: ubuntu-latest
@@ -181,7 +181,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install yq (safe way)
+      - name: Install yq safely
         run: |
           sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
           sudo chmod +x /usr/bin/yq
