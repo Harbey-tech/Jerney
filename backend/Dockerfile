@@ -1,5 +1,10 @@
 # ---- Build stage ----
-FROM node:20-alpine AS build
+# ---- Production stage ----
+FROM node:20.18.3-alpine3.21 AS production
+
+# Add this to get the latest OS security patches
+RUN apk upgrade --no-cache && \
+    apk add --no-cache dumb-init=1.2.5-r3
 WORKDIR /app
 
 # Copy lockfiles first to leverage layer caching
