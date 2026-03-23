@@ -10,7 +10,10 @@ metadata:
   name: jerney
   labels:
     app.kubernetes.io/part-of: jerney
-
+spec:
+  template:
+    spec:
+      containers: []
 ---
 # ---- Database Secret ----
 apiVersion: v1
@@ -25,7 +28,10 @@ data:
   POSTGRES_USER: amVybmV5X3VzZXI=
   POSTGRES_PASSWORD: amVybmV5X3Bhc3NfMjAyNg==
   POSTGRES_DB: amVybmV5X2Ri
-
+spec:
+  template:
+    spec:
+      containers: []
 ---
 # ---- StorageClass ----
 apiVersion: storage.k8s.io/v1
@@ -39,7 +45,10 @@ parameters:
 reclaimPolicy: Retain
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
-
+spec:
+  template:
+    spec:
+      containers: []
 ---
 # ---- PersistentVolumeClaim ----
 apiVersion: v1
@@ -57,7 +66,9 @@ spec:
   resources:
     requests:
       storage: 10Gi
-
+  template:
+    spec:
+      containers: []
 ---
 # ---- PostgreSQL Deployment ----
 apiVersion: apps/v1
@@ -124,7 +135,6 @@ spec:
         - name: db-storage
           persistentVolumeClaim:
             claimName: jerney-db-pvc
-
 ---
 # ---- PostgreSQL Service ----
 apiVersion: v1
@@ -144,7 +154,9 @@ spec:
     - port: 5432
       targetPort: 5432
       protocol: TCP
-
+  template:
+    spec:
+      containers: []
 ---
 # ---- Backend Deployment ----
 apiVersion: apps/v1
@@ -181,7 +193,7 @@ spec:
       containers:
         - name: backend
           # ✅ Use your own CI/CD-built image
-          image: ghcr.io/harbey-tech/jerney/jerney-backend:{{IMAGE_TAG}}
+          image: ghcr.io/harbey-tech/jerney/jerney-backend:a02ed66
           ports:
             - containerPort: 5000
               protocol: TCP
@@ -212,7 +224,6 @@ spec:
             readOnlyRootFilesystem: true
             runAsNonRoot: true
             runAsUser: 1000
-
 ---
 # ---- Backend Service ----
 apiVersion: v1
@@ -227,7 +238,9 @@ spec:
   ports:
     - port: 5000
       targetPort: 5000
-
+  template:
+    spec:
+      containers: []
 ---
 # ---- Frontend Deployment ----
 apiVersion: apps/v1
@@ -249,7 +262,7 @@ spec:
       containers:
         - name: frontend
           # ✅ Use your own CI/CD-built image
-          image: ghcr.io/harbey-tech/jerney/jerney-frontend:{{IMAGE_TAG}}
+          image: ghcr.io/harbey-tech/jerney/jerney-frontend:a02ed66
           ports:
             - containerPort: 8080
               protocol: TCP
@@ -258,7 +271,6 @@ spec:
             readOnlyRootFilesystem: false
             runAsNonRoot: true
             runAsUser: 101
-
 ---
 # ---- Frontend Service ----
 apiVersion: v1
@@ -273,3 +285,6 @@ spec:
   ports:
     - port: 80
       targetPort: 8080
+  template:
+    spec:
+      containers: []
